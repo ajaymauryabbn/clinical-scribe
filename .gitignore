@@ -1,0 +1,23 @@
+# Secrets
+.env
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+venv/
+.venv/
+.env
+
+# Audio Files (Local Testing)
+*.wav
+*.mp3
+*.m4a
+*.webm
+
+# Data
+data/synthetic/*
+!data/synthetic/.gitkeep
+
+# OS
+.DS_Store

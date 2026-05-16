@@ -1,0 +1,32 @@
+# Backend
+fastapi
+uvicorn
+python-multipart
+python-dotenv
+openai  # DeepSeek is OpenAI-compatible
+langgraph
+langchain
+langchain-openai
+
+# Audio & Transcription
+openai-whisper
+pyannote.audio
+torch
+torchaudio
+pydub
+rapidfuzz
+silero-vad
+
+# Medical & NLP
+scispacy
+https://s3-us-west-2.amazonaws.com/ai2-s2-scispacy/releases/v0.5.4/en_core_sci_sm-0.5.4.tar.gz
+simple_icd_10
+pandas
+
+# Frontend
+streamlit
+requests
+
+# Utilities
+pytest
+httpx

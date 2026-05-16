@@ -1,0 +1,43 @@
+hindi_phrase,english_medical_term,soap_section
+sir dard,headache,subjective
+pet mein dard,abdominal pain,subjective
+chest mein dard,chest pain,subjective
+khasi,cough,subjective
+bukhaar,fever,subjective
+sans lene mein takleef,difficulty breathing / dyspnoea,subjective
+ulti,vomiting,subjective
+dast,diarrhoea,subjective
+kamzori,weakness / fatigue,subjective
+neend nahi aana,insomnia,subjective
+bhookh nahi lagti,loss of appetite,subjective
+thakaan,fatigue,subjective
+ghutne mein dard,knee pain,subjective
+kamar mein dard,lower back pain,subjective
+pair mein sujan,pedal oedema,objective
+pet mein gas,flatulence / bloating,subjective
+aankhon mein jalan,eye irritation,subjective
+sar ghoomna,dizziness / vertigo,subjective
+muh sookha rehta hai,dry mouth / xerostomia,subjective
+peshab mein jalan,dysuria,subjective
+dil ki dhadkan tez,palpitations,subjective
+chakkar,dizziness,subjective
+badan dard,body ache / myalgia,subjective
+khujli,itching / pruritus,subjective
+daane,rashes,objective
+sujan,swelling / edema,objective
+jalan,burning sensation,subjective
+khoon aana,bleeding,objective
+gale mein kharash,sore throat,subjective
+zukham,common cold / coryza,subjective
+pyaas zyada lagna,increased thirst / polydipsia,subjective
+peshab zyada aana,increased urination / polyuria,subjective
+vazan kam hona,weight loss,subjective
+vazan badhna,weight gain,subjective
+ghabrahat,anxiety / palpitations,subjective
+bechaini,restlessness,subjective
+paseena aana,excessive sweating / diaphoresis,subjective
+naksir,nosebleed / epistaxis,subjective
+kabz,constipation,subjective
+mochi,sprain,subjective
+chot,injury / trauma,subjective
+zakham,wound / ulcer,objective
