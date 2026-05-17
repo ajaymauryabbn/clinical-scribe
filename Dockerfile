@@ -8,6 +8,7 @@ WORKDIR /app
 RUN apt-get update && apt-get install -y \
     ffmpeg \
     git \
+    build-essential \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy the requirements file into the container
@@ -15,6 +16,9 @@ COPY requirements.txt .
 
 # Install dependencies
 RUN pip install --no-cache-dir -r requirements.txt
+
+# Install the scispacy model separately to avoid dependency depth issues
+RUN pip install https://s3-us-west-2.amazonaws.com/ai2-s2-scispacy/releases/v0.5.4/en_core_sci_sm-0.5.4.tar.gz
 
 # Copy the rest of the application code
 COPY . .
