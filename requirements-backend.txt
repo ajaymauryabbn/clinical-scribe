@@ -23,9 +23,9 @@ silero-vad>=5.0.0
 
 # Medical & NLP
 scispacy>=0.5.4
-# Fixed bucket name: ai2-s3-scispacy (was incorrectly ai2-s2-scispacy)
-https://s3-us-west-2.amazonaws.com/ai2-s3-scispacy/releases/v0.5.4/en_core_sci_sm-0.5.4.tar.gz
-simple_icd_10>=3.0.0
+# Fixed bucket name: ai2-s2-scispacy
+https://s3-us-west-2.amazonaws.com/ai2-s2-scispacy/releases/v0.5.4/en_core_sci_sm-0.5.4.tar.gz
+simple_icd_10>=2.0.0
 pandas>=2.0.0
 rapidfuzz>=3.0.0
 

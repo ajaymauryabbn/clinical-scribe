@@ -3,6 +3,8 @@ import whisper
 from pyannote.audio import Pipeline
 import torch
 import time
+import tempfile
+from pydub import AudioSegment
 from typing import List, Dict
 
 class TranscriptionPipeline:
@@ -45,39 +47,50 @@ class TranscriptionPipeline:
                     "speaker": speaker
                 })
         else:
-            # Fallback if no diarization: just one segment
-            # Use whisper's internal VAD or just one chunk
-            segments = [{"start": 0, "end": None, "speaker": "SPEAKER_00"}]
+            # Fallback if no diarization: just use Whisper's internal VAD segments
+            print("Skipping diarization, using Whisper segments only.")
+            result = self.whisper_model.transcribe(audio_path, language=None)
+            for w_seg in result["segments"]:
+                segments.append({
+                    "start": w_seg["start"],
+                    "end": w_seg["end"],
+                    "speaker": "SPEAKER_00", # Default speaker
+                    "text": w_seg["text"].strip()
+                })
+            return segments
         
-        # 2. Transcription
+        # 2. Transcription per segment
         print(f"Transcribing {len(segments)} segments...")
         final_transcript = []
+        audio = AudioSegment.from_file(audio_path)
         
         for seg in segments:
-            # Extract segment audio (Whisper handles timing if passed, 
-            # but for accuracy we can crop or just transcribe whole and use segment times)
-            # Simplest for V1: Transcribe the whole thing and match segments
-            pass
+            # Skip very short segments
+            if seg["end"] - seg["start"] < 0.5:
+                continue
+                
+            # Extract segment
+            start_ms = int(seg["start"] * 1000)
+            end_ms = int(seg["end"] * 1000)
+            seg_audio = audio[start_ms:end_ms]
             
-        # Refined V1 approach: Transcribe the whole file with timestamps
-        result = self.whisper_model.transcribe(audio_path, language=None)
-        
-        # Merge whisper segments with diarization speakers
-        # This is a simple heuristic: match whisper segment middle time to diarization segment
-        for w_seg in result["segments"]:
-            mid_time = (w_seg["start"] + w_seg["end"]) / 2
-            speaker = "UNKNOWN"
-            for d_seg in segments:
-                if d_seg["end"] is None or (d_seg["start"] <= mid_time <= d_seg["end"]):
-                    speaker = d_seg["speaker"]
-                    break
-            
-            final_transcript.append({
-                "speaker": speaker,
-                "text": w_seg["text"].strip(),
-                "start": w_seg["start"],
-                "end": w_seg["end"]
-            })
+            with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp_seg:
+                seg_audio.export(tmp_seg.name, format="wav")
+                
+                # Transcribe segment with auto-language detection
+                # This is slower but better for Hinglish mid-sentence switches
+                res = self.whisper_model.transcribe(tmp_seg.name, language=None)
+                text = res["text"].strip()
+                
+                if text:
+                    final_transcript.append({
+                        "speaker": seg["speaker"],
+                        "text": text,
+                        "start": seg["start"],
+                        "end": seg["end"]
+                    })
+                
+                os.remove(tmp_seg.name)
             
         return final_transcript
 
