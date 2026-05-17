@@ -1,105 +1,81 @@
 import os
-import whisper
-from pyannote.audio import Pipeline
-import torch
-import time
 import tempfile
-from pydub import AudioSegment
+from openai import OpenAI
 from typing import List, Dict
+from pydub import AudioSegment
+
+# Separate client for Whisper API (OpenAI) vs LLM (DeepSeek)
+_whisper_client = None
+
+def _get_whisper_client() -> OpenAI:
+    global _whisper_client
+    if _whisper_client is None:
+        api_key = os.getenv("OPENAI_API_KEY")
+        if not api_key:
+            raise RuntimeError("OPENAI_API_KEY is not set. Required for audio transcription.")
+        _whisper_client = OpenAI(api_key=api_key)
+    return _whisper_client
+
 
 class TranscriptionPipeline:
-    def __init__(self, model_name="medium", hf_token=None):
-        self.hf_token = hf_token
-        self.device = "cuda" if torch.cuda.is_available() else "cpu"
-        
-        # Load Whisper model
-        print(f"Loading Whisper model: {model_name} on {self.device}...")
-        self.whisper_model = whisper.load_model(model_name, device=self.device)
-        
-        # Load pyannote pipeline for diarization
-        if hf_token:
-            print("Loading pyannote diarization pipeline...")
-            self.diarization_pipeline = Pipeline.from_pretrained(
-                "pyannote/speaker-diarization-3.1",
-                use_auth_token=hf_token
-            )
-            if self.diarization_pipeline:
-                self.diarization_pipeline.to(torch.device(self.device))
-        else:
-            print("HF_TOKEN not provided. Diarization will be skipped.")
-            self.diarization_pipeline = None
+    """
+    API-based transcription using OpenAI Whisper API.
+    Replaces local whisper + pyannote.audio + torch to stay within free-tier
+    RAM (512 MB). Speaker diarization can be layered on later via pyannote
+    cloud API once a paid Render plan is used.
+    """
+
+    MAX_CHUNK_BYTES = 24 * 1024 * 1024  # Whisper API hard limit: 25 MB per file
 
     def process_audio(self, audio_path: str) -> List[Dict]:
-        """
-        Diarize and transcribe audio.
-        """
-        # 1. Diarization
-        segments = []
-        if self.diarization_pipeline:
-            print("Diarizing audio...")
-            diarization = self.diarization_pipeline(audio_path)
-            
-            # Group segments by speaker to avoid too many small fragments
-            for turn, _, speaker in diarization.itertracks(yield_label=True):
-                segments.append({
-                    "start": turn.start,
-                    "end": turn.end,
-                    "speaker": speaker
-                })
-        else:
-            # Fallback if no diarization: just use Whisper's internal VAD segments
-            print("Skipping diarization, using Whisper segments only.")
-            result = self.whisper_model.transcribe(audio_path, language=None)
-            for w_seg in result["segments"]:
-                segments.append({
-                    "start": w_seg["start"],
-                    "end": w_seg["end"],
-                    "speaker": "SPEAKER_00", # Default speaker
-                    "text": w_seg["text"].strip()
-                })
-            return segments
-        
-        # 2. Transcription per segment
-        print(f"Transcribing {len(segments)} segments...")
-        final_transcript = []
-        audio = AudioSegment.from_file(audio_path)
-        
-        for seg in segments:
-            # Skip very short segments
-            if seg["end"] - seg["start"] < 0.5:
-                continue
-                
-            # Extract segment
-            start_ms = int(seg["start"] * 1000)
-            end_ms = int(seg["end"] * 1000)
-            seg_audio = audio[start_ms:end_ms]
-            
-            with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp_seg:
-                seg_audio.export(tmp_seg.name, format="wav")
-                
-                # Transcribe segment with auto-language detection
-                # This is slower but better for Hinglish mid-sentence switches
-                res = self.whisper_model.transcribe(tmp_seg.name, language=None)
-                text = res["text"].strip()
-                
-                if text:
-                    final_transcript.append({
-                        "speaker": seg["speaker"],
-                        "text": text,
-                        "start": seg["start"],
-                        "end": seg["end"]
-                    })
-                
-                os.remove(tmp_seg.name)
-            
-        return final_transcript
+        client = _get_whisper_client()
+        chunks = self._split_if_needed(audio_path)
+        transcript: List[Dict] = []
+        time_offset = 0.0
 
-# Singleton instance
+        for chunk_path in chunks:
+            try:
+                with open(chunk_path, "rb") as f:
+                    response = client.audio.transcriptions.create(
+                        model="whisper-1",
+                        file=f,
+                        response_format="verbose_json",
+                        timestamp_granularities=["segment"],
+                    )
+                for seg in response.segments:
+                    transcript.append({
+                        "speaker": "SPEAKER_00",
+                        "text": seg.text.strip(),
+                        "start": round(seg.start + time_offset, 3),
+                        "end": round(seg.end + time_offset, 3),
+                    })
+                if response.segments:
+                    time_offset += response.segments[-1].end
+            finally:
+                if chunk_path != audio_path:
+                    os.remove(chunk_path)
+
+        return transcript
+
+    def _split_if_needed(self, audio_path: str) -> List[str]:
+        if os.path.getsize(audio_path) <= self.MAX_CHUNK_BYTES:
+            return [audio_path]
+
+        audio = AudioSegment.from_file(audio_path)
+        chunk_ms = 10 * 60 * 1000  # 10-minute chunks
+        chunks = []
+        for start in range(0, len(audio), chunk_ms):
+            chunk = audio[start:start + chunk_ms]
+            tmp = tempfile.NamedTemporaryFile(suffix=".wav", delete=False)
+            chunk.export(tmp.name, format="wav")
+            chunks.append(tmp.name)
+        return chunks
+
+
 _pipeline = None
 
-def get_pipeline():
+def get_pipeline() -> TranscriptionPipeline:
     global _pipeline
     if _pipeline is None:
-        hf_token = os.getenv("HF_TOKEN")
-        _pipeline = TranscriptionPipeline(hf_token=hf_token)
+        _pipeline = TranscriptionPipeline()
     return _pipeline
