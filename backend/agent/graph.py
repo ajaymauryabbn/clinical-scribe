@@ -21,6 +21,7 @@ class ScribeState(TypedDict):
     icd_codes: list
     drug_corrections: list
     soap_note: dict
+    prescriptions: list
     flags: list
 
 def extract_entities_node(state: ScribeState):
@@ -109,17 +110,94 @@ def generate_soap_node(state: ScribeState):
         
     return {"soap_note": soap_note}
 
+def verify_soap_node(state: ScribeState):
+    """
+    Node to verify the SOAP note for clinical consistency and accuracy.
+    """
+    print("---VERIFYING SOAP NOTE---")
+    
+    prompt = f"""
+    You are a clinical safety auditor. Cross-check the generated SOAP note against the original transcript.
+    
+    Transcript: {state['transcript']}
+    Generated SOAP: {state['soap_note']}
+    
+    Check for:
+    1. Factual contradictions (e.g., wrong BP, wrong drug dose).
+    2. Missing clinical findings mentioned in the transcript.
+    3. Hallucinations (findings in SOAP not in transcript).
+    
+    Output ONLY JSON with keys:
+    - 'consistent': boolean
+    - 'corrections': list of strings describing discrepancies
+    - 'flags': list of items the doctor MUST verify (e.g., "Verify Amlodipine dose", "High BP 160/100 not addressed")
+    """
+    
+    response = client.chat.completions.create(
+        model="deepseek-chat",
+        messages=[{"role": "user", "content": prompt}],
+        response_format={"type": "json_object"},
+    )
+    
+    try:
+        verification = json.loads(response.choices[0].message.content)
+        flags = verification.get("flags", [])
+    except:
+        flags = ["Verification step failed - please review carefully"]
+        
+    return {"flags": flags}
+
+def parse_prescription_node(state: ScribeState):
+    """
+    Node to extract structured prescription data from the Plan section.
+    """
+    print("---PARSING PRESCRIPTIONS---")
+    
+    plan = state["soap_note"].get("plan", "")
+    if not plan:
+        return {"prescriptions": []}
+        
+    prompt = f"""
+    Extract structured prescription data from this clinical plan:
+    {plan}
+    
+    Output ONLY a JSON list of objects with:
+    - 'drug': medication name
+    - 'dose': e.g., '5mg'
+    - 'frequency': e.g., 'once daily' or '1-0-1'
+    - 'duration': e.g., '30 days'
+    - 'route': e.g., 'oral'
+    """
+    
+    response = client.chat.completions.create(
+        model="deepseek-chat",
+        messages=[{"role": "user", "content": prompt}],
+        response_format={"type": "json_object"},
+    )
+    
+    try:
+        content = json.loads(response.choices[0].message.content)
+        prescriptions = content.get("prescriptions", []) if isinstance(content, dict) else content
+    except:
+        prescriptions = []
+        
+    return {"prescriptions": prescriptions}
+
 def create_scribe_graph():
     workflow = StateGraph(ScribeState)
 
     workflow.add_node("extract_entities", extract_entities_node)
     workflow.add_node("lookup_icd", lookup_icd_node)
     workflow.add_node("generate_soap", generate_soap_node)
+    workflow.add_node("verify_soap", verify_soap_node)
+    workflow.add_node("parse_prescription", parse_prescription_node)
 
     workflow.set_entry_point("extract_entities")
     workflow.add_edge("extract_entities", "lookup_icd")
     workflow.add_edge("lookup_icd", "generate_soap")
-    workflow.add_edge("generate_soap", END)
+    workflow.add_edge("generate_soap", "verify_soap")
+    workflow.add_edge("verify_soap", "parse_prescription")
+    workflow.add_edge("parse_prescription", END)
 
     return workflow.compile()
 
