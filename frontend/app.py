@@ -1,8 +1,16 @@
 import streamlit as st
 import os
 import json
-import requests
+import tempfile
+import sys
 from dotenv import load_dotenv
+
+# Ensure project root is in path for imports
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+from backend.transcribe import get_pipeline
+from backend.agent.graph import scribe_agent
+from backend.utils.audio_utils import convert_to_wav
 
 load_dotenv()
 
@@ -27,6 +35,51 @@ if "transcript" not in st.session_state:
 if "soap_note" not in st.session_state:
     st.session_state.soap_note = None
 
+def process_clinical_audio(audio_bytes, filename):
+    """
+    Consolidated processing: Audio -> Transcript -> SOAP
+    """
+    with st.spinner("Processing audio (Transcription & Diarization)..."):
+        # 1. Save and convert audio
+        with tempfile.NamedTemporaryFile(delete=False, suffix=os.path.splitext(filename)[1]) as tmp_input:
+            tmp_input.write(audio_bytes)
+            tmp_input_path = tmp_input.name
+        
+        try:
+            tmp_wav_path = convert_to_wav(tmp_input_path)
+            
+            # 2. Transcribe
+            pipeline = get_pipeline()
+            transcript = pipeline.process_audio(tmp_wav_path)
+            st.session_state.transcript = transcript
+            
+            # 3. Generate SOAP & Analyze
+            with st.spinner("Analyzing transcript and generating SOAP note..."):
+                initial_state = {
+                    "transcript": transcript,
+                    "doctor_turns": "",
+                    "patient_turns": "",
+                    "entities": {},
+                    "icd_codes": [],
+                    "drug_corrections": [],
+                    "soap_note": {},
+                    "prescriptions": [],
+                    "flags": []
+                }
+                result = scribe_agent.invoke(initial_state)
+                
+                st.session_state.soap_note = result["soap_note"]
+                st.session_state.flags = result.get("flags", [])
+                st.session_state.icd_codes = result.get("icd_codes", [])
+                st.session_state.prescriptions = result.get("prescriptions", [])
+                st.session_state.processed = True
+                
+        finally:
+            if os.path.exists(tmp_input_path):
+                os.remove(tmp_input_path)
+            if 'tmp_wav_path' in locals() and os.path.exists(tmp_wav_path):
+                os.remove(tmp_wav_path)
+
 # Tabs for input
 tab1, tab2, tab3 = st.tabs(["🎙️ Record", "📁 Upload", "📂 Demo Mode"])
 
@@ -34,62 +87,12 @@ with tab1:
     audio_file = st.audio_input("Record consultation")
     if audio_file:
         if st.button("Process Recording"):
-            with st.spinner("Transcribing and generating SOAP note..."):
-                backend_url = os.getenv("BACKEND_URL", "http://localhost:8000")
-                files = {"file": ("recording.wav", audio_file, "audio/wav")}
-                try:
-                    # 1. Transcribe
-                    t_res = requests.post(f"{backend_url}/transcribe", files=files, timeout=300)
-                    if t_res.status_code == 200:
-                        transcript = t_res.json()["transcript"]
-                        st.session_state.transcript = transcript
-                        
-                        # 2. Generate SOAP
-                        g_res = requests.post(f"{backend_url}/generate", json={"transcript": transcript}, timeout=60)
-                        if g_res.status_code == 200:
-                            result = g_res.json()
-                            st.session_state.soap_note = result["soap_note"]
-                            st.session_state.flags = result.get("flags", [])
-                            st.session_state.icd_codes = result.get("icd_codes", [])
-                            st.session_state.prescriptions = result.get("prescriptions", [])
-                            st.session_state.processed = True
-                        else:
-                            st.error("Failed to generate SOAP note.")
-                    else:
-                        st.error(f"Transcription failed: {t_res.text}")
-                except Exception as e:
-                    st.error(f"Error connecting to backend: {e}")
+            process_clinical_audio(audio_file.read(), "recording.wav")
 
 with tab2:
     uploaded_file = st.file_uploader("Choose an audio file", type=["wav", "mp3", "m4a"])
     if uploaded_file and st.button("Process Uploaded File"):
-        with st.spinner("Transcribing and generating SOAP note..."):
-            backend_url = os.getenv("BACKEND_URL", "http://localhost:8000")
-            files = {"file": (uploaded_file.name, uploaded_file, uploaded_file.type)}
-            try:
-                # 1. Transcribe
-                t_res = requests.post(f"{backend_url}/transcribe", files=files, timeout=300)
-                if t_res.status_code == 200:
-                    transcript = t_res.json()["transcript"]
-                    st.session_state.transcript = transcript
-                    
-                    # 2. Generate SOAP
-                    g_res = requests.post(f"{backend_url}/generate", json={"transcript": transcript}, timeout=60)
-                    if g_res.status_code == 200:
-                        result = g_res.json()
-                        st.session_state.soap_note = result["soap_note"]
-                        st.session_state.flags = result.get("flags", [])
-                        st.session_state.icd_codes = result.get("icd_codes", [])
-                        st.session_state.prescriptions = result.get("prescriptions", [])
-                        st.session_state.processed = True
-
-                    else:
-                        st.error("Failed to generate SOAP note.")
-
-                else:
-                    st.error(f"Transcription failed: {t_res.text}")
-            except Exception as e:
-                st.error(f"Error connecting to backend: {e}")
+        process_clinical_audio(uploaded_file.read(), uploaded_file.name)
 
 with tab3:
     demo_scenarios = [
@@ -115,29 +118,25 @@ with tab3:
                 
                 st.session_state.transcript = transcript
                 
-                # Call backend to process this transcript through the agent
+                # Call agent locally
                 with st.spinner("Agent is analyzing transcript..."):
-                    backend_url = os.getenv("BACKEND_URL", "http://localhost:8000")
-                    try:
-                        response = requests.post(f"{backend_url}/generate", json={"transcript": transcript}, timeout=60)
-                        if response.status_code == 200:
-                            result = response.json()
-                            st.session_state.soap_note = result["soap_note"]
-                            st.session_state.flags = result.get("flags", [])
-                            st.session_state.icd_codes = result.get("icd_codes", [])
-                        else:
-                            st.error(f"Backend error ({response.status_code}). Running agent locally...")
-                            raise Exception("Backend error")
-                    except Exception as e:
-                        # Fallback: Run agent directly in Streamlit
-                        from backend.agent.graph import scribe_agent
-                        result = scribe_agent.invoke({"transcript": transcript, "doctor_turns": "", "patient_turns": "", "entities": {}, "icd_codes": [], "drug_corrections": [], "soap_note": {}, "flags": []})
-                        st.session_state.soap_note = result["soap_note"]
-                        st.session_state.flags = result.get("flags", [])
-                        st.session_state.icd_codes = result.get("icd_codes", [])
-                        st.session_state.prescriptions = result.get("prescriptions", [])
-                        st.session_state.processed = True
-
+                    initial_state = {
+                        "transcript": transcript,
+                        "doctor_turns": "",
+                        "patient_turns": "",
+                        "entities": {},
+                        "icd_codes": [],
+                        "drug_corrections": [],
+                        "soap_note": {},
+                        "prescriptions": [],
+                        "flags": []
+                    }
+                    result = scribe_agent.invoke(initial_state)
+                    st.session_state.soap_note = result["soap_note"]
+                    st.session_state.flags = result.get("flags", [])
+                    st.session_state.icd_codes = result.get("icd_codes", [])
+                    st.session_state.prescriptions = result.get("prescriptions", [])
+                    st.session_state.processed = True
         except Exception as e:
             st.error(f"Error loading demo: {e}")
 
