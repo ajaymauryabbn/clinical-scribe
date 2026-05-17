@@ -1,0 +1,23 @@
+# Render backend — only what the current code actually imports.
+# Heavy audio/ML deps (torch, whisper, pyannote) are in requirements-backend.txt
+# and will be re-added here once the /transcribe endpoint is wired up.
+
+# API server
+fastapi>=0.110.0
+uvicorn>=0.29.0
+python-multipart>=0.0.9
+python-dotenv>=1.0.0
+
+# LangGraph agent
+openai>=1.0.0
+langgraph>=0.2.0
+langchain>=0.3.0
+langchain-openai>=0.2.0
+
+# Medical tools
+simple_icd_10>=3.0.0
+pandas>=2.0.0
+rapidfuzz>=3.0.0
+
+# HTTP (frontend → backend calls)
+requests>=2.28.0
