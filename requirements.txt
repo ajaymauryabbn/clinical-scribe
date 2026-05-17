@@ -1,32 +1,19 @@
-# Backend
-fastapi
-uvicorn
-python-multipart
-python-dotenv
-openai  # DeepSeek is OpenAI-compatible
-langgraph
-langchain
-langchain-openai
+# HuggingFace Spaces (Streamlit frontend) dependencies
+# For Render backend, use requirements-backend.txt
 
-# Audio & Transcription
-openai-whisper
-pyannote.audio
-torch
-torchaudio
-pydub
-rapidfuzz
-silero-vad
+# Agent (used by fallback path in frontend)
+openai>=1.0.0
+langgraph>=0.2.0
+langchain>=0.3.0
+langchain-openai>=0.2.0
 
-# Medical & NLP
-scispacy
-https://s3-us-west-2.amazonaws.com/ai2-s2-scispacy/releases/v0.5.4/en_core_sci_sm-0.5.4.tar.gz
-simple_icd_10
-pandas
+# Medical data processing
+simple_icd_10>=3.0.0
+pandas>=2.0.0
+rapidfuzz>=3.0.0
 
 # Frontend
-streamlit
-requests
+requests>=2.28.0
 
 # Utilities
-pytest
-httpx
+python-dotenv>=1.0.0

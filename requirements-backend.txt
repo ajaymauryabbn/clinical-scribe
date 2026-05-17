@@ -1,0 +1,37 @@
+# Render backend dependencies
+# Use this file for the Render deploy: pip install -r requirements-backend.txt
+
+# Backend API
+fastapi>=0.110.0
+uvicorn>=0.14.0
+python-multipart>=0.0.9
+python-dotenv>=1.0.0
+
+# Agent
+openai>=1.0.0
+langgraph>=0.2.0
+langchain>=0.3.0
+langchain-openai>=0.2.0
+
+# Audio & Transcription
+openai-whisper>=20231117
+pyannote.audio>=3.1.0
+torch>=2.1.0
+torchaudio>=2.1.0
+pydub>=0.25.0
+silero-vad>=5.0.0
+
+# Medical & NLP
+scispacy>=0.5.4
+# Fixed bucket name: ai2-s3-scispacy (was incorrectly ai2-s2-scispacy)
+https://s3-us-west-2.amazonaws.com/ai2-s3-scispacy/releases/v0.5.4/en_core_sci_sm-0.5.4.tar.gz
+simple_icd_10>=3.0.0
+pandas>=2.0.0
+rapidfuzz>=3.0.0
+
+# Requests
+requests>=2.28.0
+
+# Testing
+pytest>=7.0.0
+httpx>=0.24.0
