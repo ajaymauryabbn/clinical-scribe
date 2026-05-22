@@ -3,7 +3,7 @@ import json
 from typing import TypedDict, List, Dict
 from langgraph.graph import StateGraph, END
 from openai import OpenAI
-from backend.agent.tools import extract_vitals, map_hindi_phrases, correct_drug_names
+from backend.agent.tools import extract_vitals, map_hindi_phrases, correct_drug_names, search_icd10, redact_pii
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -15,6 +15,7 @@ client = OpenAI(
 
 class ScribeState(TypedDict):
     transcript: list # List of dicts with speaker, text, start, end
+    redacted_transcript: list
     doctor_turns: str
     patient_turns: str
     entities: dict
@@ -24,15 +25,31 @@ class ScribeState(TypedDict):
     prescriptions: list
     flags: list
 
+def redact_pii_node(state: ScribeState):
+    """
+    Node to redact PII from the transcript before further processing.
+    """
+    print("---REDACTING PII---")
+    redacted_transcript = []
+    for turn in state["transcript"]:
+        redacted_turn = turn.copy()
+        redacted_turn["text"] = redact_pii(turn["text"])
+        redacted_transcript.append(redacted_turn)
+        
+    return {"redacted_transcript": redacted_transcript}
+
 def extract_entities_node(state: ScribeState):
     """
     Node to extract medical entities using local tools.
     """
     print("---EXTRACTING ENTITIES---")
     
+    # Use redacted transcript for privacy
+    transcript = state.get("redacted_transcript", state["transcript"])
+    
     # Concatenate doctor turns
-    doctor_turns = "\n".join([t["text"] for t in state["transcript"] if t["speaker"] == "DOCTOR"])
-    patient_turns = "\n".join([t["text"] for t in state["transcript"] if t["speaker"] == "PATIENT"])
+    doctor_turns = "\n".join([t["text"] for t in transcript if t["speaker"] == "DOCTOR"])
+    patient_turns = "\n".join([t["text"] for t in transcript if t["speaker"] == "PATIENT"])
     full_text = f"{doctor_turns}\n{patient_turns}"
     
     vitals = extract_vitals(full_text)
@@ -51,28 +68,64 @@ def extract_entities_node(state: ScribeState):
 
 def lookup_icd_node(state: ScribeState):
     """
-    Node to map diagnosis terms to ICD-10 codes using LLM.
+    Node to map diagnosis terms to ICD-10 codes using local tool + LLM.
     """
     print("---LOOKING UP ICD CODES---")
     
-    prompt = f"""
-    Given the following clinical findings and symptoms, suggest the most relevant ICD-10 codes.
+    # 1. Ask LLM to extract specific medical conditions from findings
+    prompt_extract = f"""
+    Based on the following findings, list the specific medical conditions or diagnoses mentioned or implied.
     Findings: {state['entities']}
+    Transcript: {state['doctor_turns']}
     
-    Output ONLY a JSON list of objects with 'code' and 'description'.
+    Output ONLY a JSON object with a 'conditions' key containing a list of strings (e.g., {{"conditions": ["Hypertension", "Type 2 Diabetes"]}}).
     """
     
     response = client.chat.completions.create(
         model="deepseek-chat",
-        messages=[{"role": "user", "content": prompt}],
+        messages=[{"role": "user", "content": prompt_extract}],
+        response_format={"type": "json_object"},
+    )
+    
+    try:
+        content = json.loads(response.choices[0].message.content)
+        conditions = content.get("conditions", [])
+    except Exception as e:
+        conditions = []
+        
+    # 2. Use local tool to find candidate codes for each condition
+    icd_candidates = []
+    for condition in conditions:
+        matches = search_icd10(condition)
+        if matches:
+            icd_candidates.extend(matches)
+            
+    # 3. Use LLM to refine and select the most accurate codes
+    if not icd_candidates:
+        # Fallback to LLM if no local matches found
+        prompt_refine = f"""
+        Suggest the most relevant ICD-10 codes for these conditions: {conditions}.
+        Output ONLY a JSON object with a 'codes' key containing a list of objects with 'code' and 'description'.
+        """
+    else:
+        prompt_refine = f"""
+        From the following candidate ICD-10 codes, select the most accurate ones for the conditions identified: {conditions}.
+        Candidates: {icd_candidates}
+        
+        Output ONLY a JSON object with a 'codes' key containing a list of objects with 'code' and 'description'.
+        """
+        
+    response = client.chat.completions.create(
+        model="deepseek-chat",
+        messages=[{"role": "user", "content": prompt_refine}],
         response_format={"type": "json_object"},
     )
     
     try:
         content = json.loads(response.choices[0].message.content)
         icd_codes = content.get("codes", []) if isinstance(content, dict) else content
-    except:
-        icd_codes = []
+    except Exception as e:
+        icd_codes = icd_candidates[:3] # Fallback to first 3 tool results
         
     return {"icd_codes": icd_codes}
 
@@ -82,11 +135,13 @@ def generate_soap_node(state: ScribeState):
     """
     print("---GENERATING SOAP NOTE---")
     
+    transcript = state.get("redacted_transcript", state["transcript"])
+    
     prompt = f"""
     You are a clinical documentation specialist. Generate a structured English SOAP note from this Hinglish transcript.
     
     Transcript:
-    {state['transcript']}
+    {transcript}
     
     Extracted Vitals: {state['entities']['vitals']}
     Hindi phrase translations: {state['entities']['hindi_phrases']}
@@ -116,10 +171,12 @@ def verify_soap_node(state: ScribeState):
     """
     print("---VERIFYING SOAP NOTE---")
     
+    transcript = state.get("redacted_transcript", state["transcript"])
+    
     prompt = f"""
     You are a clinical safety auditor. Cross-check the generated SOAP note against the original transcript.
     
-    Transcript: {state['transcript']}
+    Transcript: {transcript}
     Generated SOAP: {state['soap_note']}
     
     Check for:
@@ -186,13 +243,15 @@ def parse_prescription_node(state: ScribeState):
 def create_scribe_graph():
     workflow = StateGraph(ScribeState)
 
+    workflow.add_node("redact_pii", redact_pii_node)
     workflow.add_node("extract_entities", extract_entities_node)
     workflow.add_node("lookup_icd", lookup_icd_node)
     workflow.add_node("generate_soap", generate_soap_node)
     workflow.add_node("verify_soap", verify_soap_node)
     workflow.add_node("parse_prescription", parse_prescription_node)
 
-    workflow.set_entry_point("extract_entities")
+    workflow.set_entry_point("redact_pii")
+    workflow.add_edge("redact_pii", "extract_entities")
     workflow.add_edge("extract_entities", "lookup_icd")
     workflow.add_edge("lookup_icd", "generate_soap")
     workflow.add_edge("generate_soap", "verify_soap")

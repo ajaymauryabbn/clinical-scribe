@@ -6,6 +6,7 @@ import time
 import tempfile
 from pydub import AudioSegment
 from typing import List, Dict
+from concurrent.futures import ThreadPoolExecutor
 
 class TranscriptionPipeline:
     def __init__(self, model_name="medium", hf_token=None):
@@ -29,9 +30,40 @@ class TranscriptionPipeline:
             print("HF_TOKEN not provided. Diarization will be skipped.")
             self.diarization_pipeline = None
 
+    def _transcribe_segment(self, seg: Dict, audio: AudioSegment) -> Dict:
+        """
+        Helper to transcribe a single segment.
+        """
+        if seg["end"] - seg["start"] < 0.5:
+            return None
+            
+        start_ms = int(seg["start"] * 1000)
+        end_ms = int(seg["end"] * 1000)
+        seg_audio = audio[start_ms:end_ms]
+        
+        with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp_seg:
+            tmp_seg_name = tmp_seg.name
+            seg_audio.export(tmp_seg_name, format="wav")
+            
+            try:
+                # Transcribe segment with auto-language detection
+                res = self.whisper_model.transcribe(tmp_seg_name, language=None)
+                text = res["text"].strip()
+                if text:
+                    return {
+                        "speaker": seg["speaker"],
+                        "text": text,
+                        "start": seg["start"],
+                        "end": seg["end"]
+                    }
+            finally:
+                if os.path.exists(tmp_seg_name):
+                    os.remove(tmp_seg_name)
+        return None
+
     def process_audio(self, audio_path: str) -> List[Dict]:
         """
-        Diarize and transcribe audio.
+        Diarize and transcribe audio in parallel.
         """
         # 1. Diarization
         segments = []
@@ -39,7 +71,6 @@ class TranscriptionPipeline:
             print("Diarizing audio...")
             diarization = self.diarization_pipeline(audio_path)
             
-            # Group segments by speaker to avoid too many small fragments
             for turn, _, speaker in diarization.itertracks(yield_label=True):
                 segments.append({
                     "start": turn.start,
@@ -47,50 +78,30 @@ class TranscriptionPipeline:
                     "speaker": speaker
                 })
         else:
-            # Fallback if no diarization: just use Whisper's internal VAD segments
             print("Skipping diarization, using Whisper segments only.")
             result = self.whisper_model.transcribe(audio_path, language=None)
             for w_seg in result["segments"]:
                 segments.append({
                     "start": w_seg["start"],
                     "end": w_seg["end"],
-                    "speaker": "SPEAKER_00", # Default speaker
+                    "speaker": "SPEAKER_00",
                     "text": w_seg["text"].strip()
                 })
             return segments
         
-        # 2. Transcription per segment
-        print(f"Transcribing {len(segments)} segments...")
-        final_transcript = []
+        # 2. Parallel Transcription
+        print(f"Transcribing {len(segments)} segments in parallel...")
         audio = AudioSegment.from_file(audio_path)
         
-        for seg in segments:
-            # Skip very short segments
-            if seg["end"] - seg["start"] < 0.5:
-                continue
-                
-            # Extract segment
-            start_ms = int(seg["start"] * 1000)
-            end_ms = int(seg["end"] * 1000)
-            seg_audio = audio[start_ms:end_ms]
-            
-            with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp_seg:
-                seg_audio.export(tmp_seg.name, format="wav")
-                
-                # Transcribe segment with auto-language detection
-                # This is slower but better for Hinglish mid-sentence switches
-                res = self.whisper_model.transcribe(tmp_seg.name, language=None)
-                text = res["text"].strip()
-                
-                if text:
-                    final_transcript.append({
-                        "speaker": seg["speaker"],
-                        "text": text,
-                        "start": seg["start"],
-                        "end": seg["end"]
-                    })
-                
-                os.remove(tmp_seg.name)
+        # Use ThreadPoolExecutor to parallelize transcription
+        # Max workers can be adjusted based on CPU/GPU capacity
+        max_workers = 4 if self.device == "cpu" else 2
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            # map maintains order
+            results = list(executor.map(lambda s: self._transcribe_segment(s, audio), segments))
+        
+        # Filter out None results and short/empty segments
+        final_transcript = [r for r in results if r is not None]
             
         return final_transcript
 
