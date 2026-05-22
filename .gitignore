@@ -17,6 +17,7 @@ venv/
 
 # Data
 data/synthetic/*
+!data/synthetic/*.json
 !data/synthetic/.gitkeep
 
 # OS
