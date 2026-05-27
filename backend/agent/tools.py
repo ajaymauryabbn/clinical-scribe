@@ -80,14 +80,20 @@ def correct_drug_names(text: str) -> List[Dict]:
     if drug_names_df.empty:
         return corrections
         
-    words = text.split()
+    # Remove punctuation and split into words
+    clean_text = re.sub(r'[^\w\s]', '', text)
+    words = clean_text.split()
     brand_names = drug_names_df["brand_name"].tolist()
     
     for word in words:
-        # Simple heuristic: only check words starting with capital or length > 4
-        if len(word) > 4:
+        # Check words length >= 3 to catch 'Pan', 'Avil', 'Dolo'
+        if len(word) >= 3:
             match = process.extractOne(word, brand_names, scorer=fuzz.WRatio)
-            if match and match[1] > 85 and match[0] != word:
+            
+            # Stricter threshold for short words to avoid false positives with common Hindi/English words
+            threshold = 95 if len(word) < 5 else 85
+            
+            if match and match[1] >= threshold and match[0].lower() != word.lower():
                 corrections.append({
                     "original": word,
                     "corrected": match[0],

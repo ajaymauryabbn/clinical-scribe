@@ -178,5 +178,32 @@ if st.session_state.processed:
                 for flag in st.session_state["flags"]:
                     st.write(f"- {flag}")
             
-            st.button("📋 Copy SOAP Note")
-            st.download_button("💾 Download .txt", "\n".join([f"{k.upper()}: {v}" for k,v in soap.items()]), file_name="soap_note.txt")
+            # Copy to Clipboard functionality using a small HTML/JS snippet
+            soap_text = "\n".join([f"{k.upper()}: {v}" for k,v in soap.items()])
+            copy_code = f"""
+                <script>
+                function copyToClipboard() {{
+                    const text = {json.dumps(soap_text)};
+                    navigator.clipboard.writeText(text).then(() => {{
+                        alert('SOAP Note copied to clipboard!');
+                    }});
+                }}
+                </script>
+                <button onclick="copyToClipboard()" style="
+                    background-color: #4CAF50;
+                    border: none;
+                    color: white;
+                    padding: 10px 20px;
+                    text-align: center;
+                    text-decoration: none;
+                    display: inline-block;
+                    font-size: 16px;
+                    margin: 4px 2px;
+                    cursor: pointer;
+                    border-radius: 8px;
+                ">📋 Copy SOAP Note</button>
+            """
+            import streamlit.components.v1 as components
+            components.html(copy_code, height=70)
+            
+            st.download_button("💾 Download .txt", soap_text, file_name="soap_note.txt")

@@ -48,14 +48,14 @@ def redact_pii_node(state: ScribeState):
 
 def extract_entities_node(state: ScribeState):
     """
-    Node to extract medical entities using local tools.
+    Node to extract medical entities using local tools and apply drug corrections.
     """
     print("---EXTRACTING ENTITIES---")
     
     # Use redacted transcript for privacy
     transcript = state.get("redacted_transcript", state["transcript"])
     
-    # Concatenate doctor turns
+    # Concatenate turns for tool processing
     doctor_turns = "\n".join([t["text"] for t in transcript if t["speaker"] == "DOCTOR"])
     patient_turns = "\n".join([t["text"] for t in transcript if t["speaker"] == "PATIENT"])
     full_text = f"{doctor_turns}\n{patient_turns}"
@@ -64,6 +64,17 @@ def extract_entities_node(state: ScribeState):
     hindi_matches = map_hindi_phrases(full_text)
     drug_corrections = correct_drug_names(doctor_turns)
     
+    # Apply drug corrections to the transcript for better SOAP generation
+    corrected_transcript = []
+    for turn in transcript:
+        new_turn = turn.copy()
+        if turn["speaker"] == "DOCTOR":
+            for corr in drug_corrections:
+                # Simple replacement (case-insensitive where possible)
+                pattern = re.compile(re.escape(corr["original"]), re.IGNORECASE)
+                new_turn["text"] = pattern.sub(corr["corrected"], new_turn["text"])
+        corrected_transcript.append(new_turn)
+    
     return {
         "doctor_turns": doctor_turns,
         "patient_turns": patient_turns,
@@ -71,7 +82,8 @@ def extract_entities_node(state: ScribeState):
             "vitals": vitals,
             "hindi_phrases": hindi_matches
         },
-        "drug_corrections": drug_corrections
+        "drug_corrections": drug_corrections,
+        "redacted_transcript": corrected_transcript
     }
 
 def lookup_icd_node(state: ScribeState):
