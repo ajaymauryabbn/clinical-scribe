@@ -4,6 +4,14 @@ from typing import TypedDict, List, Dict
 from langgraph.graph import StateGraph, END
 from openai import OpenAI
 from backend.agent.tools import extract_vitals, map_hindi_phrases, correct_drug_names, search_icd10, redact_pii
+from backend.agent.prompts import (
+    CONDITION_EXTRACTION_PROMPT,
+    ICD_REFINE_PROMPT_NO_CANDIDATES,
+    ICD_REFINE_PROMPT_WITH_CANDIDATES,
+    SOAP_GENERATION_PROMPT,
+    SOAP_VERIFICATION_PROMPT,
+    PRESCRIPTION_PARSING_PROMPT
+)
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -73,13 +81,10 @@ def lookup_icd_node(state: ScribeState):
     print("---LOOKING UP ICD CODES---")
     
     # 1. Ask LLM to extract specific medical conditions from findings
-    prompt_extract = f"""
-    Based on the following findings, list the specific medical conditions or diagnoses mentioned or implied.
-    Findings: {state['entities']}
-    Transcript: {state['doctor_turns']}
-    
-    Output ONLY a JSON object with a 'conditions' key containing a list of strings (e.g., {{"conditions": ["Hypertension", "Type 2 Diabetes"]}}).
-    """
+    prompt_extract = CONDITION_EXTRACTION_PROMPT.format(
+        entities=state['entities'],
+        doctor_turns=state['doctor_turns']
+    )
     
     response = client.chat.completions.create(
         model="deepseek-chat",
@@ -103,17 +108,12 @@ def lookup_icd_node(state: ScribeState):
     # 3. Use LLM to refine and select the most accurate codes
     if not icd_candidates:
         # Fallback to LLM if no local matches found
-        prompt_refine = f"""
-        Suggest the most relevant ICD-10 codes for these conditions: {conditions}.
-        Output ONLY a JSON object with a 'codes' key containing a list of objects with 'code' and 'description'.
-        """
+        prompt_refine = ICD_REFINE_PROMPT_NO_CANDIDATES.format(conditions=conditions)
     else:
-        prompt_refine = f"""
-        From the following candidate ICD-10 codes, select the most accurate ones for the conditions identified: {conditions}.
-        Candidates: {icd_candidates}
-        
-        Output ONLY a JSON object with a 'codes' key containing a list of objects with 'code' and 'description'.
-        """
+        prompt_refine = ICD_REFINE_PROMPT_WITH_CANDIDATES.format(
+            conditions=conditions,
+            icd_candidates=icd_candidates
+        )
         
     response = client.chat.completions.create(
         model="deepseek-chat",
@@ -137,20 +137,12 @@ def generate_soap_node(state: ScribeState):
     
     transcript = state.get("redacted_transcript", state["transcript"])
     
-    prompt = f"""
-    You are a clinical documentation specialist. Generate a structured English SOAP note from this Hinglish transcript.
-    
-    Transcript:
-    {transcript}
-    
-    Extracted Vitals: {state['entities']['vitals']}
-    Hindi phrase translations: {state['entities']['hindi_phrases']}
-    Suggested ICD-10: {state['icd_codes']}
-    
-    Rules:
-    - Translate clinical Hindi to medical English.
-    - Output ONLY JSON with keys: subjective, objective, assessment, plan.
-    """
+    prompt = SOAP_GENERATION_PROMPT.format(
+        transcript=transcript,
+        vitals=state['entities']['vitals'],
+        hindi_phrases=state['entities']['hindi_phrases'],
+        icd_codes=state['icd_codes']
+    )
     
     response = client.chat.completions.create(
         model="deepseek-chat",
@@ -173,22 +165,10 @@ def verify_soap_node(state: ScribeState):
     
     transcript = state.get("redacted_transcript", state["transcript"])
     
-    prompt = f"""
-    You are a clinical safety auditor. Cross-check the generated SOAP note against the original transcript.
-    
-    Transcript: {transcript}
-    Generated SOAP: {state['soap_note']}
-    
-    Check for:
-    1. Factual contradictions (e.g., wrong BP, wrong drug dose).
-    2. Missing clinical findings mentioned in the transcript.
-    3. Hallucinations (findings in SOAP not in transcript).
-    
-    Output ONLY JSON with keys:
-    - 'consistent': boolean
-    - 'corrections': list of strings describing discrepancies
-    - 'flags': list of items the doctor MUST verify (e.g., "Verify Amlodipine dose", "High BP 160/100 not addressed")
-    """
+    prompt = SOAP_VERIFICATION_PROMPT.format(
+        transcript=transcript,
+        soap_note=state['soap_note']
+    )
     
     response = client.chat.completions.create(
         model="deepseek-chat",
@@ -214,17 +194,7 @@ def parse_prescription_node(state: ScribeState):
     if not plan:
         return {"prescriptions": []}
         
-    prompt = f"""
-    Extract structured prescription data from this clinical plan:
-    {plan}
-    
-    Output ONLY a JSON list of objects with:
-    - 'drug': medication name
-    - 'dose': e.g., '5mg'
-    - 'frequency': e.g., 'once daily' or '1-0-1'
-    - 'duration': e.g., '30 days'
-    - 'route': e.g., 'oral'
-    """
+    prompt = PRESCRIPTION_PARSING_PROMPT.format(plan=plan)
     
     response = client.chat.completions.create(
         model="deepseek-chat",
