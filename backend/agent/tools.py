@@ -4,11 +4,19 @@ from typing import List, Dict
 import re
 from rapidfuzz import process, fuzz
 import simple_icd_10 as icd
+import spacy
 
 # Load dictionaries
 DATA_DIR = os.path.join(os.path.dirname(__file__), "../../data")
 HINDI_MEDICAL_PATH = os.path.join(DATA_DIR, "hindi_medical.csv")
 DRUG_NAMES_PATH = os.path.join(DATA_DIR, "drug_names.csv")
+
+# Load scispaCy model
+try:
+    nlp = spacy.load("en_core_sci_sm")
+except Exception as e:
+    print(f"Warning: Could not load scispaCy model: {e}")
+    nlp = None
 
 try:
     hindi_medical_df = pd.read_csv(HINDI_MEDICAL_PATH)
@@ -17,6 +25,15 @@ except Exception as e:
     print(f"Warning: Could not load dictionaries: {e}")
     hindi_medical_df = pd.DataFrame()
     drug_names_df = pd.DataFrame()
+
+def medical_ner(text: str) -> List[str]:
+    """
+    Extracts medical entities using scispaCy.
+    """
+    if not nlp:
+        return []
+    doc = nlp(text)
+    return [ent.text for ent in doc.ents]
 
 def redact_pii(text: str) -> str:
     """
@@ -104,23 +121,29 @@ def correct_drug_names(text: str) -> List[Dict]:
 def extract_vitals(text: str) -> Dict:
     """
     Extracts vitals (BP, Pulse, Temp, SpO2) using regex.
+    Adds [VERIFY] tag as per spec requirement for safety.
     """
     vitals = {}
     
     # BP: 120/80
     bp_match = re.search(r"(\d{2,3}/\d{2,3})", text)
     if bp_match:
-        vitals["BP"] = bp_match.group(1)
+        vitals["BP"] = f"{bp_match.group(1)} [VERIFY]"
         
     # Pulse/Heart Rate
     pulse_match = re.search(r"(?:pulse|heart rate|HR)\D*(\d{2,3})", text, re.I)
     if pulse_match:
-        vitals["Pulse"] = pulse_match.group(1)
+        vitals["Pulse"] = f"{pulse_match.group(1)} bpm [VERIFY]"
         
     # Temperature
-    temp_match = re.search(r"(\d{2,3}(?:\.\d)?)\D*(?:F|C|temp)", text, re.I)
+    temp_match = re.search(r"(\d{2,3}(?:\.\d)?)\D*(?:F|C|temp|degree)", text, re.I)
     if temp_match:
-        vitals["Temperature"] = temp_match.group(1)
+        vitals["Temperature"] = f"{temp_match.group(1)} [VERIFY]"
+        
+    # SpO2
+    spo2_match = re.search(r"(?:spo2|oxygen|saturation)\D*(\d{2,3})", text, re.I)
+    if spo2_match:
+        vitals["SpO2"] = f"{spo2_match.group(1)}% [VERIFY]"
         
     return vitals
 

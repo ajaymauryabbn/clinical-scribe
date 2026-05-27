@@ -3,7 +3,7 @@ import json
 from typing import TypedDict, List, Dict
 from langgraph.graph import StateGraph, END
 from openai import OpenAI
-from backend.agent.tools import extract_vitals, map_hindi_phrases, correct_drug_names, search_icd10, redact_pii
+from backend.agent.tools import extract_vitals, map_hindi_phrases, correct_drug_names, search_icd10, redact_pii, medical_ner
 from backend.agent.prompts import (
     CONDITION_EXTRACTION_PROMPT,
     ICD_REFINE_PROMPT_NO_CANDIDATES,
@@ -27,6 +27,7 @@ class ScribeState(TypedDict):
     doctor_turns: str
     patient_turns: str
     entities: dict
+    scispacy_entities: list
     icd_codes: list
     drug_corrections: list
     soap_note: dict
@@ -63,6 +64,7 @@ def extract_entities_node(state: ScribeState):
     vitals = extract_vitals(full_text)
     hindi_matches = map_hindi_phrases(full_text)
     drug_corrections = correct_drug_names(doctor_turns)
+    scispacy_entities = medical_ner(full_text)
     
     # Apply drug corrections to the transcript for better SOAP generation
     corrected_transcript = []
@@ -82,6 +84,7 @@ def extract_entities_node(state: ScribeState):
             "vitals": vitals,
             "hindi_phrases": hindi_matches
         },
+        "scispacy_entities": scispacy_entities,
         "drug_corrections": drug_corrections,
         "redacted_transcript": corrected_transcript
     }
@@ -94,7 +97,7 @@ def lookup_icd_node(state: ScribeState):
     
     # 1. Ask LLM to extract specific medical conditions from findings
     prompt_extract = CONDITION_EXTRACTION_PROMPT.format(
-        entities=state['entities'],
+        entities={**state['entities'], "scispacy": state.get('scispacy_entities', [])},
         doctor_turns=state['doctor_turns']
     )
     

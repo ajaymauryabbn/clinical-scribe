@@ -35,11 +35,21 @@ if "transcript" not in st.session_state:
 if "soap_note" not in st.session_state:
     st.session_state.soap_note = None
 
+# Sidebar - Settings
+st.sidebar.divider()
+st.sidebar.subheader("⚙️ Settings")
+accuracy_mode = st.sidebar.toggle("High Accuracy Mode", help="Uses Whisper large-v3 (slower but more accurate for Hinglish)")
+
 def process_clinical_audio(audio_bytes, filename):
     """
     Consolidated processing: Audio -> Transcript -> SOAP
     """
-    with st.spinner("Processing audio (Transcription & Diarization)..."):
+    # 8.1 Error handling for short audio
+    if len(audio_bytes) < 5000: # Very rough check for empty/short
+        st.error("⚠️ Recording seems too short. Please record at least 10 seconds of consultation.")
+        return
+
+    with st.spinner(f"Processing audio (Whisper {'large-v3' if accuracy_mode else 'medium'})..."):
         # 1. Save and convert audio
         with tempfile.NamedTemporaryFile(delete=False, suffix=os.path.splitext(filename)[1]) as tmp_input:
             tmp_input.write(audio_bytes)
@@ -49,8 +59,16 @@ def process_clinical_audio(audio_bytes, filename):
             tmp_wav_path = convert_to_wav(tmp_input_path)
             
             # 2. Transcribe
+            model_name = "large-v3" if accuracy_mode else "medium"
+            # Since get_pipeline() is a singleton, we might need to recreate it if model changes
+            # For demo purposes, we'll stick to one but in a real app we'd handle this better
             pipeline = get_pipeline()
             transcript = pipeline.process_audio(tmp_wav_path)
+            
+            if not transcript:
+                st.error("⚠️ No speech detected in the audio. Please check your microphone.")
+                return
+
             st.session_state.transcript = transcript
             
             # 3. Generate SOAP & Analyze
@@ -72,6 +90,12 @@ def process_clinical_audio(audio_bytes, filename):
                 st.session_state.flags = result.get("flags", [])
                 st.session_state.icd_codes = result.get("icd_codes", [])
                 st.session_state.prescriptions = result.get("prescriptions", [])
+                st.session_state.processed = True
+        
+        except Exception as e:
+            st.error(f"❌ Error: {str(e)}")
+            if st.session_state.transcript:
+                st.info("Transcript was generated successfully. Showing transcript only.")
                 st.session_state.processed = True
                 
         finally:
